@@ -1,0 +1,145 @@
+import { NextResponse } from 'next/server';
+import connectDB from '@/lib/mongodb';
+import Order from '@/models/Order';
+import Product from '@/models/Product';
+import Category from '@/models/Category';
+import { getAuth } from '@/lib/firebase-admin';
+import { resolveDashboardAccess } from '@/lib/storeAccessControl';
+import { canAccessDashboardArea } from '@/lib/storeDashboardPermissions';
+import { ACTIVE_RECORD_FILTER } from '@/lib/storeTrash';
+import { buildCategoryLookupForProductRefs } from '@/lib/categoryLookup';
+import { isFailedSalesReportOrder } from '@/lib/storeSalesReport';
+import {
+  aggregateOrdersByProduct,
+  applyCatalogNamesToOrders,
+  buildFailedOrderRows,
+  buildSalesOrderRows,
+  buildOrdersByProductDateFilter,
+  collectOrderProductIds,
+  enrichOrdersByProductRows,
+  getOrdersByProductDateLabel,
+} from '@/lib/storeOrdersByProduct';
+
+export const dynamic = 'force-dynamic';
+
+async function loadCatalogProducts(productIds = []) {
+  const ids = [...new Set((productIds || []).map(String).filter(Boolean))];
+  if (!ids.length) return [];
+  return Product.find({ _id: { $in: ids } })
+    .select('name nameAr title sku brand category categories slug images inStock')
+    .lean();
+}
+
+export async function GET(request) {
+  try {
+    const authHeader = request.headers.get('authorization');
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    const decoded = await getAuth().verifyIdToken(authHeader.replace('Bearer ', ''));
+    if (!decoded?.uid) {
+      return NextResponse.json({ error: 'Invalid token' }, { status: 401 });
+    }
+
+    const access = await resolveDashboardAccess(decoded.uid, decoded);
+    if (!access.isSeller || !access.storeId) {
+      return NextResponse.json({ error: 'Not authorized' }, { status: 401 });
+    }
+
+    if (!canAccessDashboardArea(access.permissions, 'ordersByProduct', { isOwner: access.isOwner })) {
+      return NextResponse.json({ error: 'You do not have access to Orders by Product' }, { status: 403 });
+    }
+
+    const storeId = access.storeId;
+
+    const { searchParams } = new URL(request.url);
+    const dateRange = searchParams.get('dateRange') || 'TODAY';
+    const fromDate = searchParams.get('fromDate') || '';
+    const toDate = searchParams.get('toDate') || '';
+    const fromTime = searchParams.get('fromTime') || '';
+    const toTime = searchParams.get('toTime') || '';
+    const viewParam = String(searchParams.get('view') || 'products').toLowerCase();
+    const view = ['failed', 'sales'].includes(viewParam) ? viewParam : 'products';
+    const dateFilter = buildOrdersByProductDateFilter(dateRange, fromDate, toDate, fromTime, toTime);
+
+    await connectDB();
+
+    const rawOrders = await Order.find({
+      storeId,
+      ...dateFilter,
+      ...ACTIVE_RECORD_FILTER,
+    })
+      .select('shortOrderNumber createdAt total status orderItems items paymentMethod paymentStatus isPaid delhivery guestName guestEmail guestPhone shippingAddress')
+      .lean();
+
+    const catalogProducts = await loadCatalogProducts(collectOrderProductIds(rawOrders));
+    const orders = applyCatalogNamesToOrders(rawOrders, catalogProducts);
+
+    const failedOrders = orders.filter((order) => isFailedSalesReportOrder(order) || String(order?.status || '').toUpperCase() === 'CANCELLED');
+    const successOrders = orders.filter((order) => !isFailedSalesReportOrder(order) && String(order?.status || '').toUpperCase() !== 'CANCELLED');
+
+    if (view === 'failed') {
+      const failedRows = buildFailedOrderRows(orders.filter((order) => isFailedSalesReportOrder(order)));
+
+      return NextResponse.json({
+        view,
+        dateRange,
+        dateLabel: getOrdersByProductDateLabel(dateRange, fromDate, toDate, fromTime, toTime),
+        totalOrders: successOrders.length,
+        failedOrders: failedOrders.length,
+        totalOrdersInRange: orders.length,
+        totalProducts: 0,
+        rows: failedRows,
+      });
+    }
+
+    if (view === 'sales') {
+      const salesRows = buildSalesOrderRows(successOrders);
+
+      return NextResponse.json({
+        view,
+        dateRange,
+        dateLabel: getOrdersByProductDateLabel(dateRange, fromDate, toDate, fromTime, toTime),
+        totalOrders: successOrders.length,
+        failedOrders: failedOrders.length,
+        totalOrdersInRange: orders.length,
+        totalProducts: 0,
+        rows: salesRows,
+      });
+    }
+
+    const aggregated = aggregateOrdersByProduct(successOrders);
+    const productIds = aggregated
+      .map((row) => row.productId)
+      .filter((id) => id && !String(id).startsWith('line:'));
+
+    const products = productIds.length
+      ? catalogProducts.filter((product) => productIds.includes(String(product._id)))
+      : [];
+    // Load any IDs missing from the first catalog pass (shouldn't happen often).
+    const missingIds = productIds.filter((id) => !products.some((product) => String(product._id) === String(id)));
+    const extraProducts = missingIds.length ? await loadCatalogProducts(missingIds) : [];
+    const allProducts = [...products, ...extraProducts];
+
+    const categoryMap = await buildCategoryLookupForProductRefs(Category, allProducts);
+    const rows = enrichOrdersByProductRows(aggregated, allProducts, categoryMap);
+
+    return NextResponse.json({
+      view: 'products',
+      dateRange,
+      dateLabel: getOrdersByProductDateLabel(dateRange, fromDate, toDate, fromTime, toTime),
+      totalOrders: successOrders.length,
+      failedOrders: failedOrders.length,
+      totalOrdersInRange: orders.length,
+      totalProducts: rows.length,
+      rows,
+    });
+  } catch (error) {
+    console.error('[orders-by-product] GET error:', error);
+    return NextResponse.json(
+      { error: error?.message || 'Failed to load orders by product' },
+      { status: 500 },
+    );
+  }
+}

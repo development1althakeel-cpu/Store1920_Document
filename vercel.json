@@ -1,0 +1,64 @@
+{
+  "crons": [
+    {
+      "path": "/api/cron/product-ai-autofill",
+      "schedule": "* * * * *"
+    },
+    {
+      "path": "/api/cron/abandoned-checkout-whatsapp",
+      "schedule": "* * * * *"
+    },
+    {
+      "path": "/api/cron/waslah-auto-ship",
+      "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/cron/waslah-sync-status",
+      "schedule": "0 */3 * * *"
+    },
+    {
+      "path": "/api/cron/reconcile-payments",
+      "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/cron/daily-admin-orders-digest",
+      "schedule": "0 6 * * 1-6"
+    },
+    {
+      "path": "/api/cron/pickup-overdue-alert",
+      "schedule": "0 * * * *"
+    },
+    {
+      "path": "/api/cron/email-marketing-campaigns",
+      "schedule": "* * * * *"
+    }
+  ],
+  "functions": {
+    "app/api/store/product/bulk-import/route.js": {
+      "maxDuration": 300,
+      "memory": 3008
+    },
+    "app/api/store/waslah/ship/route.js": {
+      "maxDuration": 120,
+      "memory": 1024
+    },
+    "app/api/cron/waslah-sync-status/route.js": {
+      "maxDuration": 300,
+      "memory": 1024
+    },
+    "app/api/cron/email-marketing-campaigns/route.js": {
+      "maxDuration": 300,
+      "memory": 1024
+    },
+    "app/api/store/home-menu-categories/route.js": {
+      "maxDuration": 120,
+      "memory": 2048
+    },
+    "app/api/**/*.js": {
+      "maxDuration": 60,
+      "memory": 1024
+    }
+  }
+}
+
+
