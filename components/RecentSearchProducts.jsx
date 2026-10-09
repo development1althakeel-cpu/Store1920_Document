@@ -1,0 +1,235 @@
+'use client';
+
+import { useEffect, useState } from 'react';
+import { useSelector } from 'react-redux';
+import { useAuth } from '@/lib/useAuth';
+import axios from 'axios';
+import Link from 'next/link';
+import { ChevronRight } from 'lucide-react';
+import ProductCard from '@/components/ProductCard';
+import { HomeProductGridSkeleton } from '@/components/home/HomeSectionSkeletons';
+import {
+  HOME_PRODUCT_GRID_CLASS,
+  HOME_SECTION_CLASS,
+  HOME_SECTION_HEADER_CLASS,
+  HOME_SECTION_EYEBROW_CLASS,
+  HOME_SECTION_HEADING_CLASS,
+  HOME_SECTION_SUBTITLE_CLASS,
+  HOME_SECTION_GRID_INNER_CLASS,
+} from '@/lib/storefrontCarousel';
+
+const normalizeImages = (images) => {
+  // Handle array
+  if (Array.isArray(images)) {
+    return images.filter(img => {
+      // Accept strings with content
+      if (typeof img === 'string') return img.trim().length > 0
+      // Accept objects with url/src
+      if (typeof img === 'object' && img !== null) {
+        return img.url || img.src || img.path || img.data || false
+      }
+      return false
+    })
+  }
+  
+  // Handle null/undefined
+  if (images === null || images === undefined) return []
+  
+  // Handle object - only if it has image data properties
+  if (typeof images === 'object') {
+    if (images.url || images.src || images.path || images.data) {
+      return [images]
+    }
+    return [] // Empty object has no valid image data
+  }
+  
+  // Handle string
+  if (typeof images === 'string') {
+    return images.trim().length > 0 ? [images] : []
+  }
+  
+  return []
+};
+
+export default function RecentSearchProducts() {
+  const products = useSelector(state => state.product.list);
+  const { user, getToken } = useAuth();
+  const [recentProducts, setRecentProducts] = useState([]);
+  const [isNewCustomer, setIsNewCustomer] = useState(true);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const fetchRecentlyViewed = async () => {
+      let viewedProductIds = [];
+
+      // If logged in, fetch from database
+      if (user) {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 8000); // 8 second timeout
+        
+        try {
+          const token = await getToken();
+          if (token) {
+            const response = await axios.get('/api/browse-history', {
+              headers: { Authorization: `Bearer ${token}` },
+              signal: controller.signal,
+            });
+            clearTimeout(timeoutId);
+            
+            // API returns history with products already populated
+            if (response.data?.success && response.data?.history && response.data.history.length > 0) {
+              const viewed = response.data.history
+                .map(h => h.product)
+                .filter(Boolean)
+                .slice(0, 8);
+              if (viewed.length > 0) {
+                setRecentProducts(viewed);
+                setIsNewCustomer(false);
+                setLoading(false);
+                return;
+              }
+            }
+          }
+        } catch (error) {
+          clearTimeout(timeoutId);
+          
+          // Don't log if it's just an abort (expected timeout)
+          if (error.name !== 'CanceledError' && error.code !== 'ERR_CANCELED') {
+            // Only log if it's a real error, not a timeout
+            if (error.message && error.message !== 'The user aborted a request.') {
+              console.warn('[RecentSearchProducts] Browse history fetch warning:', error.message);
+            }
+          }
+          
+          // Fallback to localStorage if API fails
+          const localViewed = localStorage.getItem('recentlyViewed');
+          if (localViewed) {
+            try {
+              viewedProductIds = JSON.parse(localViewed);
+            } catch (e) {
+              console.error('[RecentSearchProducts] Error parsing localStorage viewed:', e);
+            }
+          }
+        }
+      } else {
+        // Not logged in - use localStorage
+        const localViewed = localStorage.getItem('recentlyViewed');
+        if (localViewed) {
+          try {
+            viewedProductIds = JSON.parse(localViewed);
+          } catch (error) {
+            console.error('[RecentSearchProducts] Error parsing recently viewed:', error);
+          }
+        }
+      }
+
+      // Map IDs to products from Redux
+      if (viewedProductIds.length > 0 && products.length > 0) {
+        const viewed = viewedProductIds
+          .map(id => {
+            const p = products.find(p => (p._id || p.id) === id);
+            if (!p || !p.name || !p.slug) return null;
+            if (p.quantity !== undefined && typeof p.quantity === 'number' && !p.images) {
+              console.warn('[RecentSearchProducts] Skipping cart item:', p);
+              return null;
+            }
+            return p;
+          })
+          .filter(Boolean)
+          .slice(0, 8);
+        
+        if (viewed.length > 0) {
+          setIsNewCustomer(false);
+          setRecentProducts(viewed);
+        }
+      }
+      
+      setLoading(false);
+    };
+
+    // Only fetch if products are loaded
+    if (products && products.length > 0) {
+      fetchRecentlyViewed();
+    } else {
+      setLoading(false);
+    }
+  }, [products, user, getToken]);
+
+  // Show skeleton while loading
+  if (loading) {
+    return <HomeProductGridSkeleton count={5} />;
+  }
+
+  // Don't show if customer is new
+  if (isNewCustomer || recentProducts.length === 0) {
+    return null;
+  }
+
+  // Final safety check: filter out any object that looks like a cart item
+  const safeProducts = recentProducts.filter(product => {
+    // Reject if missing any core product field
+    if (!product || typeof product !== 'object') {
+      console.error('[RecentSearchProducts] Rejected non-object:', product);
+      return false;
+    }
+    
+    if (!product.name || !product.slug) {
+      console.error('[RecentSearchProducts] Rejected - missing name/slug:', { name: product.name, slug: product.slug, keys: Object.keys(product) });
+      return false;
+    }
+    
+    const imagesArray = normalizeImages(product.images);
+    if (imagesArray.length === 0) {
+      console.error('[RecentSearchProducts] Rejected - invalid images:', { images: product.images, keys: Object.keys(product) });
+      return false;
+    }
+    
+    // Reject if it has cart-specific keys (strong signal it's a cart item)
+    if (product.hasOwnProperty('quantity') && product.hasOwnProperty('price') && product.hasOwnProperty('variantOptions')) {
+      console.error('[RecentSearchProducts] Rejected - has cart item keys:', product);
+      return false;
+    }
+
+    // Reject if quantity is a number (cart signature)
+    if (typeof product.quantity === 'number') {
+      console.error('[RecentSearchProducts] Rejected - quantity is a number:', product);
+      return false;
+    }
+
+    return true;
+  });
+
+  console.log('[RecentSearchProducts] Safe products after filter:', safeProducts.length, 'from', recentProducts.length);
+  if (safeProducts.length > 0) console.log('[RecentSearchProducts] First safe product:', safeProducts[0]);
+
+  if (safeProducts.length === 0) {
+    return null;
+  }
+
+  return (
+    <section className={HOME_SECTION_CLASS}>
+      <div className={HOME_SECTION_GRID_INNER_CLASS}>
+        <div className={HOME_SECTION_HEADER_CLASS}>
+          <div>
+            <span className={`${HOME_SECTION_EYEBROW_CLASS} text-orange-600`}>Your History</span>
+            <h2 className={HOME_SECTION_HEADING_CLASS}>Recently Viewed Products</h2>
+            <p className={HOME_SECTION_SUBTITLE_CLASS}>Products you&apos;ve recently checked out</p>
+          </div>
+          <Link
+            href="/recently-viewed"
+            className="flex shrink-0 items-center gap-2 text-sm font-semibold text-gray-700 transition hover:text-orange-600"
+          >
+            View All
+            <ChevronRight size={18} />
+          </Link>
+        </div>
+
+        <div className={HOME_PRODUCT_GRID_CLASS}>
+          {safeProducts.map((product) => (
+            <ProductCard key={product._id || product.id} product={product} />
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}
