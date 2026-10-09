@@ -1,0 +1,60 @@
+# Environment variables
+.env
+.env.local
+.env.*.local
+firebase-service-account.json
+*firebase-adminsdk*.json
+
+# Dependencies
+node_modules/
+/.pnp
+.pnp.js
+
+# Testing
+/coverage
+
+# Next.js
+/.next/
+/out/
+
+# Production
+/build
+/dist
+
+# Misc
+.DS_Store
+*.pem
+.swp
+.swo
+*~
+.vscode-settings.json
+
+# Debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+
+# Cache
+.cache/
+.eslintcache
+
+# Local env files
+.env.local
+.env.*.local
+
+# Vercel
+.vercel

@@ -1,0 +1,82 @@
+# Nginx upload size (fixes 413 Request Entity Too Large)
+# + HTTP/2 for PageSpeed "Modern HTTP" (browser ↔ nginx)
+
+The HTML `413` page from nginx means the reverse proxy rejected the request **before** it reached Next.js.
+Increase the body limit on the server that runs nginx (e.g. AWS EC2, VPS).
+
+PageSpeed "Modern HTTP / Est savings ~620ms" means the **browser** is talking HTTP/1.1 to nginx.
+That is fixed on the server — not by changing Next.js chunks or `_rsc` calls.
+Keep `proxy_http_version 1.1` for nginx → Node (upstream); only enable `http2` on `listen 443`.
+
+## Quick fix
+
+Edit your nginx site config (often `/etc/nginx/nginx.conf` or `/etc/nginx/sites-available/store1920`):
+
+```nginx
+http {
+    # Allow large product/media uploads (default is often 1m)
+    client_max_body_size 200M;
+}
+
+server {
+    # http2 = multiplexing for many JS chunks / images (fixes PageSpeed Modern HTTP)
+    listen 443 ssl http2;
+    server_name your-domain.com;
+
+    # ssl_certificate / ssl_certificate_key as you already have them
+
+    client_max_body_size 200M;
+
+    location / {
+        proxy_pass http://127.0.0.1:3000;
+        # Upstream to Next.js stays 1.1 — that is normal and correct
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        # Timeouts for slow uploads
+        proxy_read_timeout 300s;
+        proxy_send_timeout 300s;
+    }
+}
+```
+
+Then reload nginx:
+
+```bash
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+### Verify
+
+In Chrome DevTools → Network → Protocol column should show `h2` (or `h3`), not `http/1.1`.
+Or: `curl -sI --http2 https://store1920.com | head`
+
+If you use Cloudflare in front of the server: enable HTTP/2 (and HTTP/3) in Network settings.
+Cloudflare → origin can still be HTTP/1.1; browsers will still see HTTP/2 from Cloudflare.
+
+## App-side mitigations (already in codebase)
+
+1. **Client compression** — images are resized/compressed before upload (`lib/compressImageForUpload.js`).
+2. **Direct S3 upload** — `/api/store/upload/presign` returns a presigned URL so files go **browser → S3**, bypassing nginx.
+3. **Server optimization** — `sharp` compresses images on API routes before storing.
+
+Product save now uploads media to S3 first, then sends only URLs in the form (small JSON payload).
+
+## S3 CORS (required for direct browser upload)
+
+In the S3 bucket CORS configuration, allow PUT from your storefront domain:
+
+```json
+[
+  {
+    "AllowedHeaders": ["*"],
+    "AllowedMethods": ["PUT", "GET", "HEAD"],
+    "AllowedOrigins": ["https://your-domain.com", "http://localhost:3000"],
+    "ExposeHeaders": ["ETag"],
+    "MaxAgeSeconds": 3000
+  }
+]
+```

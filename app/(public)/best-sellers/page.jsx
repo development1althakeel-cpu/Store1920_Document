@@ -1,0 +1,163 @@
+'use client'
+
+import { useMemo, useState, useCallback } from "react";
+import { useSelector } from "react-redux";
+import { SlidersHorizontal } from "lucide-react";
+import ProductCard from "@/components/ProductCard";
+import ProductFilterSidebar from "@/components/ProductFilterSidebar";
+import MobileFilterHost from "@/components/MobileFilterHost";
+import { productMatchesPriceRange } from "@/lib/productPriceFilter";
+
+export default function BestSellersPage() {
+  const products = useSelector((state) => state.product.list);
+
+  const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
+  const [activeFilters, setActiveFilters] = useState({
+    categories: [],
+    priceRange: { min: 0, max: 100000 },
+    rating: 0,
+    inStock: false,
+    sortBy: 'newest'
+  });
+
+  const bestSellerProducts = useMemo(() => {
+    return (products || []).filter((product) => {
+      const badges = product?.attributes?.badges || product?.badges || [];
+      return Array.isArray(badges) && badges.some((badge) => {
+        const label = typeof badge === 'string' ? badge : badge?.label;
+        return String(label || '').trim() === 'Best Seller';
+      });
+    });
+  }, [products]);
+
+  const applyFilters = useCallback((productsToFilter) => {
+    return productsToFilter.filter((product) => {
+      if (activeFilters.categories.length > 0) {
+        const productCategories = [
+          product.category,
+          ...(Array.isArray(product.categories) ? product.categories : [])
+        ].filter(Boolean);
+
+        const hasMatchingCategory = productCategories.some((cat) =>
+          activeFilters.categories.includes(cat)
+        );
+        if (!hasMatchingCategory) return false;
+      }
+
+      if (!productMatchesPriceRange(product, activeFilters)) {
+        return false;
+      }
+
+      if (activeFilters.rating > 0) {
+        const avgRating = product.averageRating || 0;
+        if (avgRating < activeFilters.rating) return false;
+      }
+
+      if (activeFilters.inStock && product.inStock === false) {
+        return false;
+      }
+
+      return true;
+    });
+  }, [activeFilters]);
+
+  const sortProducts = useCallback((productsToSort) => {
+    const sorted = [...productsToSort];
+
+    switch (activeFilters.sortBy) {
+      case 'price-low-high':
+        return sorted.sort((a, b) => a.price - b.price);
+      case 'price-high-low':
+        return sorted.sort((a, b) => b.price - a.price);
+      case 'rating':
+        return sorted.sort((a, b) => (b.averageRating || 0) - (a.averageRating || 0));
+      case 'discount':
+        return sorted.sort((a, b) => {
+          const discountA = a.AED > a.price ? ((a.AED - a.price) / a.AED * 100) : 0;
+          const discountB = b.AED > b.price ? ((b.AED - b.price) / b.AED * 100) : 0;
+          return discountB - discountA;
+        });
+      case 'newest':
+      default:
+        return sorted.sort((a, b) => {
+          const dateA = new Date(a.createdAt || 0);
+          const dateB = new Date(b.createdAt || 0);
+          return dateB - dateA;
+        });
+    }
+  }, [activeFilters.sortBy]);
+
+  const filteredAndSortedProducts = useMemo(() => {
+    const filtered = applyFilters(bestSellerProducts);
+    return sortProducts(filtered);
+  }, [bestSellerProducts, applyFilters, sortProducts]);
+
+  const handleFilterChange = useCallback((filters) => {
+    setActiveFilters(filters);
+  }, []);
+
+  return (
+    <div className="min-h-screen bg-gray-50">
+      <div className="max-w-[1400px] mx-auto px-4 sm:px-6 py-8">
+        <div className="mb-6">
+          <h1 className="text-3xl font-bold text-gray-900 mb-2">Best Sellers</h1>
+          <p className="text-gray-600">Top-performing products loved by customers</p>
+        </div>
+
+        <div className="mb-3 lg:hidden">
+          <button
+            type="button"
+            onClick={() => setMobileFiltersOpen(true)}
+            className="inline-flex min-h-11 items-center gap-2 rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm font-semibold shadow-sm"
+          >
+            <SlidersHorizontal size={16} />
+            Filters & Sort
+          </button>
+        </div>
+
+        <div className="flex gap-6">
+          <MobileFilterHost
+            open={mobileFiltersOpen}
+            onClose={() => setMobileFiltersOpen(false)}
+          >
+            <ProductFilterSidebar
+              products={bestSellerProducts}
+              onFilterChange={handleFilterChange}
+              initialFilters={activeFilters}
+            />
+          </MobileFilterHost>
+
+          {/* Products Grid */}
+          <div className="flex-1">
+            {filteredAndSortedProducts.length === 0 ? (
+              <div className="text-center py-16 bg-white rounded-lg border border-gray-200">
+                <p className="text-gray-500 text-lg">No best sellers match your filters.</p>
+                <button
+                  onClick={() => setActiveFilters({
+                    categories: [],
+                    priceRange: { min: 0, max: 100000 },
+                    rating: 0,
+                    inStock: false,
+                    sortBy: 'newest'
+                  })}
+                  className="mt-4 px-6 py-2 bg-[#000000] text-white rounded-lg hover:bg-[#111111] transition"
+                >
+                  Clear Filters
+                </button>
+              </div>
+            ) : (
+              <div className="grid grid-cols-2 items-stretch gap-3 md:grid-cols-3 lg:grid-cols-6">
+                {filteredAndSortedProducts.map((product, idx) => (
+                  <ProductCard
+                    key={product._id || product.id || product.slug || idx}
+                    product={product}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
